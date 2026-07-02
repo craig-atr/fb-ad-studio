@@ -1,0 +1,4 @@
+# Keep shell scripts LF so they run under bash regardless of platform.
+*.sh text eol=lf
+# Normalize text files; let git auto-detect the rest.
+* text=auto

@@ -1,0 +1,17 @@
+# fal.ai credentials — never commit
+.fal_key
+.fal_admin_key
+
+# Per-campaign working files and deliverables (regenerable / large)
+work/
+output/
+
+# Brand binary assets (add your own; keep the folder structure)
+brand/assets/**
+!brand/assets/.gitkeep
+
+# OS / tooling
+.DS_Store
+Thumbs.db
+__pycache__/
+*.pyc
