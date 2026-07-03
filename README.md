@@ -3,6 +3,11 @@
 An agent-driven pipeline for producing Facebook / Instagram video ads, one stage
 at a time, with a human review gate between every stage.
 
+> **📖 New here? Start with the [User Guide](USERGUIDE.md).** A step-by-step,
+> no-jargon walkthrough: what this is, how to make an ad, how to make it your own,
+> which files to edit, and why fal.ai — written for someone who's never heard of
+> "ICM."
+
 It follows the **Interpretable Context Methodology (ICM)**: the "program" is this
 folder of staged markdown instructions plus a few deterministic Python tools.
 Claude Code reads the applicable stage file, does the creative work, calls a tool

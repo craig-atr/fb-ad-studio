@@ -1,19 +1,28 @@
 #!/usr/bin/env python3
-"""Stage 005 image-to-video via fal.ai Kling.
+"""Stage 005 image-to-video via fal.ai — model-agnostic.
 
-Animates one approved still into a short 9:16 clip. The clip's aspect ratio is
-inherited from the input image, so feed a 1080x1920 still to get a 9:16 clip.
+Animates an approved still into a short clip. The workflow is free to pick the
+best model for each shot (see reference/fal-generation.md for the menu); this
+tool just sends `prompt` + `image_url` plus whatever OPTIONAL params you pass, so
+it works with Veo, Kling, Seedance, Hailuo, etc. — pass `--model` + the params
+that model accepts.
 
-Video generation is slow (minutes), so this uses fal's QUEUE API:
-  submit -> poll status -> fetch result -> download the mp4.
+Video is slow, so this uses fal's QUEUE API (submit -> poll -> fetch -> download).
 
-Auth: FAL_KEY environment variable, else a .fal_key file at the repo root.
+Auth: FAL_KEY env var, else a .fal_key file at the repo root.
 
-  uv run tools/generate_video.py \
-    --image work/atomic-mothers-day/04-images/scene-01.png \
-    --prompt-file work/atomic-mothers-day/05-clips/prompts/scene-01.md \
-    --output work/atomic-mothers-day/05-clips/scene-01.mp4 \
-    --duration 5
+Veo 3.1 (default, best all-rounder):
+  uv run tools/generate_video.py --image still.png --prompt-file p.md \
+    --output clip.mp4 --duration 4s --resolution 1080p --aspect-ratio 9:16 \
+    --generate-audio false
+
+Kling (cheaper motion):
+  uv run tools/generate_video.py --model fal-ai/kling-video/v2.5-turbo/pro/image-to-video \
+    --image still.png --prompt-file p.md --output clip.mp4 --duration 5 \
+    --cfg-scale 0.5 --negative-prompt "blur, warp"
+
+Start/end-frame (e.g. Seedance) to pin motion (great for text stability):
+  ... --end-image end.png --end-image-field end_image_url
 """
 
 from __future__ import annotations
@@ -22,19 +31,16 @@ import argparse
 import base64
 import json
 import mimetypes
+import os
 import sys
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 
-DEFAULT_MODEL = "fal-ai/kling-video/v2.5-turbo/pro/image-to-video"
+DEFAULT_MODEL = "fal-ai/veo3.1/image-to-video"
 QUEUE_BASE = "https://queue.fal.run"
 KEY_FILE_NAME = ".fal_key"
-DEFAULT_NEGATIVE = (
-    "blur, distortion, warping, morphing face, extra fingers, text, watermark, "
-    "camera shake, rapid zoom, scene change"
-)
 
 
 def repo_root() -> Path:
@@ -42,8 +48,6 @@ def repo_root() -> Path:
 
 
 def load_api_key() -> str:
-    import os
-
     key = os.environ.get("FAL_KEY", "").strip()
     if key:
         return key
@@ -53,20 +57,18 @@ def load_api_key() -> str:
         if key:
             return key
     raise SystemExit(
-        "No fal.ai API key found.\n"
-        "Set the FAL_KEY environment variable, or write the key to "
-        f"{key_path}\nGet a key at https://fal.ai/dashboard/keys"
+        "No fal.ai API key found. Set FAL_KEY or write the key to "
+        f"{key_path}."
     )
 
 
 def image_to_data_uri(path: Path) -> str:
     if not path.is_file():
-        raise SystemExit(f"Input image not found: {path}")
+        raise SystemExit(f"Image not found: {path}")
     mime, _ = mimetypes.guess_type(path.name)
     if mime is None:
         mime = "image/png"
-    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
-    return f"data:{mime};base64,{encoded}"
+    return f"data:{mime};base64," + base64.b64encode(path.read_bytes()).decode("ascii")
 
 
 def auth_headers(api_key: str) -> dict:
@@ -78,35 +80,27 @@ def auth_headers(api_key: str) -> dict:
 
 
 def http_json(url: str, api_key: str, data: bytes | None = None, timeout: int = 60) -> dict:
-    method = "POST" if data is not None else "GET"
-    request = urllib.request.Request(url, data=data, method=method, headers=auth_headers(api_key))
+    request = urllib.request.Request(
+        url, data=data, method="POST" if data is not None else "GET", headers=auth_headers(api_key)
+    )
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", "replace")
-        raise SystemExit(f"fal.ai request failed ({exc.code}) at {url}: {detail}")
+        raise SystemExit(f"fal.ai request failed ({exc.code}) at {url}: {detail[:1500]}")
     except urllib.error.URLError as exc:
         raise SystemExit(f"Could not reach fal.ai: {exc.reason}")
 
 
-def submit(model: str, payload: dict, api_key: str) -> dict:
-    url = f"{QUEUE_BASE}/{model.strip('/')}"
-    return http_json(url, api_key, data=json.dumps(payload).encode("utf-8"))
-
-
 def status_and_result_urls(model: str, submit_response: dict) -> tuple[str, str]:
-    # Prefer the URLs fal returns; fall back to constructing them.
     status_url = submit_response.get("status_url")
     response_url = submit_response.get("response_url")
     if status_url and response_url:
         return status_url, response_url
     request_id = submit_response.get("request_id")
     if not request_id:
-        raise SystemExit(
-            "fal queue submit returned no request_id/status_url:\n"
-            + json.dumps(submit_response, indent=2)[:2000]
-        )
+        raise SystemExit("fal queue submit returned no request_id:\n" + json.dumps(submit_response, indent=2)[:2000])
     base = f"{QUEUE_BASE}/{model.strip('/')}/requests/{request_id}"
     return f"{base}/status", base
 
@@ -114,14 +108,13 @@ def status_and_result_urls(model: str, submit_response: dict) -> tuple[str, str]
 def poll_until_done(status_url: str, api_key: str, poll_secs: int, max_wait: int) -> None:
     waited = 0
     while True:
-        status = http_json(status_url, api_key)
-        state = status.get("status")
+        state = http_json(status_url, api_key).get("status")
         if state == "COMPLETED":
             return
         if state in ("FAILED", "ERROR", "CANCELLED"):
-            raise SystemExit("fal video job failed:\n" + json.dumps(status, indent=2)[:2000])
+            raise SystemExit(f"fal video job failed (status {state}).")
         if waited >= max_wait:
-            raise SystemExit(f"Timed out after {max_wait}s waiting for the video (status {state}).")
+            raise SystemExit(f"Timed out after {max_wait}s (status {state}).")
         print(f"  ...{state or 'IN_QUEUE'} ({waited}s)", file=sys.stderr)
         time.sleep(poll_secs)
         waited += poll_secs
@@ -131,7 +124,6 @@ def extract_video_url(result: dict) -> str:
     video = result.get("video")
     if isinstance(video, dict) and video.get("url"):
         return video["url"]
-    # Some variants return a list of videos.
     videos = result.get("videos")
     if isinstance(videos, list) and videos and isinstance(videos[0], dict) and videos[0].get("url"):
         return videos[0]["url"]
@@ -140,28 +132,33 @@ def extract_video_url(result: dict) -> str:
 
 def download(url: str, dest: Path, timeout: int) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
-    if url.startswith("data:"):
-        _, _, b64 = url.partition(",")
-        dest.write_bytes(base64.b64decode(b64))
-        return
     with urllib.request.urlopen(url, timeout=timeout) as response:
         dest.write_bytes(response.read())
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Animate a still into a clip via fal Kling (stage 005).")
-    parser.add_argument("--image", required=True, help="Approved still (9:16) to animate.")
-    parser.add_argument("--prompt", help="Inline motion prompt.")
-    parser.add_argument("--prompt-file", help="Path to a file holding the motion prompt.")
-    parser.add_argument("--output", required=True, help="Where to save the mp4.")
-    parser.add_argument("--model", default=DEFAULT_MODEL, help=f"fal model id (default {DEFAULT_MODEL}).")
-    parser.add_argument("--duration", default="5", choices=["5", "10"], help="Clip length seconds.")
-    parser.add_argument("--negative-prompt", default=DEFAULT_NEGATIVE)
-    parser.add_argument("--cfg-scale", type=float, default=0.5, help="Guidance scale (default 0.5).")
-    parser.add_argument("--poll-secs", type=int, default=10, help="Status poll interval.")
-    parser.add_argument("--max-wait", type=int, default=900, help="Max seconds to wait.")
-    parser.add_argument("--timeout", type=int, default=300, help="Per-request/download timeout.")
-    args = parser.parse_args()
+    p = argparse.ArgumentParser(description="Animate a still into a clip via fal.ai (model-agnostic).")
+    p.add_argument("--image", required=True, help="Start still (maps to image_url).")
+    p.add_argument("--prompt")
+    p.add_argument("--prompt-file")
+    p.add_argument("--output", required=True)
+    p.add_argument("--model", default=DEFAULT_MODEL, help=f"fal model id (default {DEFAULT_MODEL}).")
+    # Optional, model-specific — only sent if provided:
+    p.add_argument("--duration", help='e.g. "4s" (Veo) or "5" (Kling).')
+    p.add_argument("--resolution", help='e.g. 720p, 1080p, 4k (Veo/Seedance).')
+    p.add_argument("--aspect-ratio", help='e.g. 9:16.')
+    p.add_argument("--negative-prompt")
+    p.add_argument("--cfg-scale", type=float, help="Kling guidance scale.")
+    p.add_argument("--generate-audio", choices=["true", "false"], help="Veo audio (default we pass false).")
+    p.add_argument("--seed", type=int)
+    p.add_argument("--end-image", help="End/last frame still for start-end-frame models.")
+    p.add_argument("--end-image-field", default="end_image_url",
+                   help="Payload field for the end frame (Seedance: end_image_url; Kling: tail_image_url).")
+    p.add_argument("--param", action="append", default=[], help="Extra field key=value (JSON when possible). Repeatable.")
+    p.add_argument("--poll-secs", type=int, default=10)
+    p.add_argument("--max-wait", type=int, default=900)
+    p.add_argument("--timeout", type=int, default=300)
+    args = p.parse_args()
 
     if args.prompt_file:
         prompt = Path(args.prompt_file).read_text(encoding="utf-8")
@@ -170,29 +167,43 @@ def main() -> None:
     else:
         raise SystemExit("Provide --prompt or --prompt-file.")
 
+    payload: dict = {"prompt": prompt, "image_url": image_to_data_uri(Path(args.image))}
+    if args.duration:
+        payload["duration"] = args.duration
+    if args.resolution:
+        payload["resolution"] = args.resolution
+    if args.aspect_ratio:
+        payload["aspect_ratio"] = args.aspect_ratio
+    if args.negative_prompt:
+        payload["negative_prompt"] = args.negative_prompt
+    if args.cfg_scale is not None:
+        payload["cfg_scale"] = args.cfg_scale
+    if args.generate_audio is not None:
+        payload["generate_audio"] = args.generate_audio == "true"
+    if args.seed is not None:
+        payload["seed"] = args.seed
+    if args.end_image:
+        payload[args.end_image_field] = image_to_data_uri(Path(args.end_image))
+    for raw in args.param:
+        if "=" not in raw:
+            raise SystemExit(f"--param must be key=value: {raw}")
+        key, value = raw.split("=", 1)
+        try:
+            payload[key.strip()] = json.loads(value)
+        except json.JSONDecodeError:
+            payload[key.strip()] = value
+
     api_key = load_api_key()
-    payload = {
-        "prompt": prompt,
-        "image_url": image_to_data_uri(Path(args.image)),
-        "duration": args.duration,
-        "negative_prompt": args.negative_prompt,
-        "cfg_scale": args.cfg_scale,
-    }
-
-    print(f"Submitting to {args.model} ({args.duration}s)...", file=sys.stderr)
-    submit_response = submit(args.model, payload, api_key)
+    print(f"Submitting to {args.model} ...", file=sys.stderr)
+    submit_response = http_json(f"{QUEUE_BASE}/{args.model.strip('/')}", api_key,
+                                data=json.dumps(payload).encode("utf-8"))
     status_url, response_url = status_and_result_urls(args.model, submit_response)
-
-    print("Queued. Polling for completion (video takes a few minutes)...", file=sys.stderr)
+    print("Queued. Polling (video takes a few minutes)...", file=sys.stderr)
     poll_until_done(status_url, api_key, args.poll_secs, args.max_wait)
-
-    result = http_json(response_url, api_key)
-    url = extract_video_url(result)
-
-    dest = Path(args.output)
-    download(url, dest, args.timeout)
-    print(f"Saved {dest}", file=sys.stderr)
-    print(dest)
+    url = extract_video_url(http_json(response_url, api_key))
+    download(url, Path(args.output), args.timeout)
+    print(f"Saved {args.output}", file=sys.stderr)
+    print(args.output)
 
 
 if __name__ == "__main__":

@@ -41,6 +41,18 @@ BEATS=(
 )
 # ------------------------------------------------------------------------------
 
+# Per-campaign override: work/<campaign>/roughcut-beats.txt (one "beat" per line,
+# same pipe format; blank lines and #comments ignored). Keeps each campaign's
+# timeline out of this shared script.
+BEATS_FILE="$ROOT/work/$CAMPAIGN/roughcut-beats.txt"
+if [ -f "$BEATS_FILE" ]; then
+  BEATS=()
+  while IFS= read -r line; do
+    case "$line" in ''|'#'*) continue ;; esac
+    BEATS+=("$line")
+  done < "$BEATS_FILE"
+fi
+
 [ -d "$OUT" ] || { echo "No output folder: $OUT (run build_shot_list.py first)"; exit 1; }
 mkdir -p "$SEG"
 cp "$FONT_SRC" "$SEG/font.ttf"

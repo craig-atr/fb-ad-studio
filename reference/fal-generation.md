@@ -72,29 +72,36 @@ crop/upscale) before handoff. See `reference/facebook-ad-specs.md`.
 
 ## Video generation (stage 005)
 
-`tools/generate_video.py` animates one approved still into a short clip using
-Kling image-to-video. Video is slow (minutes), so the tool uses fal's **queue
-API** (submit → poll → fetch), not the sync endpoint.
+`tools/generate_video.py` is **model-agnostic**: it sends `prompt` + `image_url`
+plus only the OPTIONAL params you pass, so any fal video model works via
+`--model`. Video is slow (minutes), so it uses fal's **queue API**. **Pick the
+right model for each shot** (see [[model-flexibility]]) — don't default blindly.
+
+### Video model menu (verify the exact endpoint/schema before first use — fal changes them)
+
+| Model (`--model`) | Best for | Notes / params |
+| --- | --- | --- |
+| `fal-ai/veo3.1/image-to-video` | **Premium hero motion, detail/text retention** | `--duration 4s/6s/8s`, `--resolution 1080p`, `--aspect-ratio 9:16`, `--generate-audio false`. ~$1.25 / 4s. Exact 1080×1920. |
+| `fal-ai/bytedance/seedance/v1.5/pro/image-to-video` | **Text/detail stability, controlled motion** | Start+end frames: `--end-image end.png --end-image-field end_image_url`. **Defaults to 16:9 — always pass `--aspect-ratio 9:16`.** ~$0.45 / 5s. Great for holding tattoo/sign text steady. |
+| `fal-ai/minimax/hailuo-02/...` | **Human body motion stability** (limbs, gestures) | Fast. |
+| `fal-ai/kling-video/v2.5-turbo/pro/image-to-video` | **Cheap volume motion** | `--duration 5/10`, `--cfg-scale 0.5`, `--negative-prompt "..."`. ~$0.40 / 5s, outputs 1072×1928. |
 
 ```bash
-uv run tools/generate_video.py \
-  --image work/atomic-mothers-day/04-images/scene-01.png \
-  --prompt-file work/atomic-mothers-day/05-clips/prompts/scene-01.md \
-  --output work/atomic-mothers-day/05-clips/scene-01.mp4 \
-  --duration 5
+# Veo 3.1 (default): premium
+uv run tools/generate_video.py --image still.png --prompt-file p.md \
+  --output clip.mp4 --duration 4s --resolution 1080p --aspect-ratio 9:16 --generate-audio false
+
+# Kling: cheaper
+uv run tools/generate_video.py --model fal-ai/kling-video/v2.5-turbo/pro/image-to-video \
+  --image still.png --prompt-file p.md --output clip.mp4 --duration 5 --cfg-scale 0.5
+
+# Start/end-frame model to pin motion (e.g. holding a tattoo/text steady)
+... --end-image end.png --end-image-field end_image_url
 ```
 
-- **Aspect ratio is inherited from the input image.** Feed a 1080×1920 still and
-  the clip is 9:16. This is why stage 004 sizing matters.
-- `--duration` accepts `5` or `10` (Kling). Default `5`.
-- `--negative-prompt` defaults to discouraging blur/distortion/warping; add
-  scene-specific negatives (e.g. "no camera zoom, no text").
-- `--cfg-scale` (default 0.5) trades prompt adherence vs natural motion.
-
-| Model id | Notes |
-| --- | --- |
-| `fal-ai/kling-video/v2.5-turbo/pro/image-to-video` | **Default.** Fast, strong motion, holds the input image well. |
-| `fal-ai/kling-video/v2.1/pro/image-to-video` | Alternate quality/price point. |
+- Only params you pass are sent — so a model that lacks `cfg_scale` won't get it.
+- `--generate-audio false` for Veo (music is added in the editor).
+- `--param key=value` is an escape hatch for any model-specific field.
 
 Kling clips come out as H.264 MP4 — already Meta-compatible. The human editor
 trims and sequences them; each AI clip is a 5 s building block, not the final ad.
