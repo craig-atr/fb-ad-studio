@@ -33,6 +33,44 @@ Final deliverable is **individual 5-second 1080×1920 clips + a shot list**, not
 finished video. A human edits the clips and real footage together (CapCut,
 Premiere, etc.) and adds the text overlays.
 
+## Why this workflow
+
+**Consistent characters and style across every shot.** Lock one reference image,
+and every scene anchors to it — so the *same* character appears across wildly
+different poses, environments, and lighting. Below is a single AI "Abe Lincoln
+look-alike," locked once and carried through an entire ad — portrait → riding a
+hover cycle → arriving at the storefront → the coat-off reveal → the 250th
+end-card. Same man every time:
+
+<p align="center">
+  <img src="docs/lincoln-1-hero.jpg" width="19%" alt="Locked Abe hero portrait" />
+  <img src="docs/lincoln-2-ride.jpg" width="19%" alt="Riding the hover cycle" />
+  <img src="docs/lincoln-3-arrival.jpg" width="19%" alt="Arriving at the storefront" />
+  <img src="docs/lincoln-4-reveal.jpg" width="19%" alt="The coat-off reveal" />
+  <img src="docs/lincoln-5-flag.jpg" width="19%" alt="The 250th end-card" />
+</p>
+
+**The right AI model for each shot — not one-size-fits-all.** Video models each
+have different strengths, so the generation tools are **model-agnostic**
+(`--model`) and the workflow **recommends the best model per shot**:
+
+- **Premium hero motion** → Veo 3.1 (the hover-cycle ride)
+- **Text that must stay crisp** → Seedance with start/end frames (keeping the
+  "Ann" tattoo legible through a laser close-up)
+- **Cheap volume** → Kling  ·  **Natural human body motion** → Hailuo
+
+And when a model fights you, you just switch. In this very ad, Veo's content
+filter rejected a photoreal treatment close-up three times — a one-flag change to
+Seedance and it went through. One key, many models, no lock-in.
+
+**Also:**
+- **Human-in-the-loop and fully inspectable** — every step is a review gate, and
+  the whole "program" is plain-English files you can open and edit.
+- **Cost transparency** — per-ad spend and remaining balance are tracked
+  (`tools/fal_cost.py`).
+- **Reusable across brands** — swap one brand profile to retarget the whole thing.
+- **Correct sizing baked in** — every asset is validated against Meta's specs.
+
 ## Layout
 
 ```text
