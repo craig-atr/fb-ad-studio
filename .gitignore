@@ -10,6 +10,9 @@ output/
 brand/assets/**
 !brand/assets/.gitkeep
 
+# Source material / exports (private — keep out of this public repo)
+*.pdf
+
 # OS / tooling
 .DS_Store
 Thumbs.db
